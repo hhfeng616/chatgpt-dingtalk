@@ -28,11 +28,7 @@ func New(userId string) *ChatGPT {
 	var ctx context.Context
 	var cancel func()
 
-	if public.Config.SessionTimeout == 0 {
-		ctx, cancel = context.WithCancel(context.Background())
-	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), public.Config.SessionTimeout)
-	}
+	ctx, cancel = context.WithTimeout(context.Background(), 600*time.Second)
 	timeOutChan := make(chan struct{}, 1)
 	go func() {
 		<-ctx.Done()
@@ -40,15 +36,24 @@ func New(userId string) *ChatGPT {
 	}()
 
 	config := openai.DefaultConfig(public.Config.ApiKey)
-	if public.Config.HttpProxy != "" {
-		config.HTTPClient.Transport = &http.Transport{
-			// 设置代理
-			Proxy: func(req *http.Request) (*url.URL, error) {
-				return url.Parse(public.Config.HttpProxy)
-			}}
-	}
-	if public.Config.BaseURL != "" {
-		config.BaseURL = public.Config.BaseURL + "/v1"
+	if public.Config.AzureOn {
+		config = openai.DefaultAzureConfig(
+			public.Config.AzureOpenAIToken,
+			"https://"+public.Config.AzureResourceName+".openai."+
+				"azure.com/",
+			public.Config.AzureDeploymentName,
+		)
+	} else {
+		if public.Config.HttpProxy != "" {
+			config.HTTPClient.Transport = &http.Transport{
+				// 设置代理
+				Proxy: func(req *http.Request) (*url.URL, error) {
+					return url.Parse(public.Config.HttpProxy)
+				}}
+		}
+		if public.Config.BaseURL != "" {
+			config.BaseURL = public.Config.BaseURL + "/v1"
+		}
 	}
 
 	return &ChatGPT{

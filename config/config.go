@@ -1,36 +1,67 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/eryajf/chatgpt-dingtalk/pkg/logger"
+	"gopkg.in/yaml.v2"
 )
 
 // Configuration 项目配置
 type Configuration struct {
-	// gtp apikey
-	ApiKey string `json:"api_key"`
+	// 日志级别，info或者debug
+	LogLevel string `yaml:"log_level"`
+	// gpt apikey
+	ApiKey string `yaml:"api_key"`
 	// 请求的 URL 地址
-	BaseURL string `json:"base_url"`
+	BaseURL string `yaml:"base_url"`
 	// 使用模型
-	Model string `json:"model"`
+	Model string `yaml:"model"`
 	// 会话超时时间
-	SessionTimeout time.Duration `json:"session_timeout"`
+	SessionTimeout time.Duration `yaml:"session_timeout"`
 	// 默认对话模式
-	DefaultMode string `json:"default_mode"`
+	DefaultMode string `yaml:"default_mode"`
 	// 代理地址
-	HttpProxy string `json:"http_proxy"`
+	HttpProxy string `yaml:"http_proxy"`
 	// 用户单日最大请求次数
-	MaxRequest int `json:"max_request"`
+	MaxRequest int `yaml:"max_request"`
 	// 指定服务启动端口，默认为 8090
-	Port string `json:"port"`
+	Port string `yaml:"port"`
 	// 指定服务的地址，就是钉钉机器人配置的回调地址，比如: http://chat.eryajf.net
-	ServiceURL string `json:"service_url"`
+	ServiceURL string `yaml:"service_url"`
+	// 限定对话类型 0：不限 1：单聊 2：群聊
+	ChatType string `yaml:"chat_type"`
+	// 哪些群组可以进行对话
+	AllowGroups []string `yaml:"allow_groups"`
+	// 哪些outgoing群组可以进行对话
+	AllowOutgoingGroups []string `yaml:"allow_outgoing_groups"`
+	// 哪些用户可以进行对话
+	AllowUsers []string `yaml:"allow_users"`
+	// 哪些用户不可以进行对话
+	DenyUsers []string `yaml:"deny_users"`
+	// 哪些Vip用户可以进行无限对话
+	VipUsers []string `yaml:"vip_users"`
+	// 指定哪些人为此系统的管理员，必须指定，否则所有人都是
+	AdminUsers []string `yaml:"admin_users"`
+	// 钉钉机器人在应用信息中的AppSecret，为了校验回调的请求是否合法，如果你的服务对接给多个机器人，这里可以配置多个机器人的secret
+	AppSecrets []string `yaml:"app_secrets"`
+	// 敏感词，提问时触发，则不允许提问，回答的内容中触发，则以 *** 代替
+	SensitiveWords []string `yaml:"sensitive_words"`
+	// 自定义帮助信息
+	Help string `yaml:"help"`
+	// AzureOpenAI 配置
+	AzureOn             bool   `yaml:"azure_on"`
+	AzureApiVersion     string `yaml:"azure_api_version"`
+	AzureResourceName   string `yaml:"azure_resource_name"`
+	AzureDeploymentName string `yaml:"azure_deployment_name"`
+	AzureOpenAIToken    string `yaml:"azure_openai_token"`
 }
 
 var config *Configuration
@@ -41,34 +72,33 @@ func LoadConfig() *Configuration {
 	once.Do(func() {
 		// 从文件中读取
 		config = &Configuration{}
-		f, err := os.Open("config.json")
+		data, err := ioutil.ReadFile("config.yml")
 		if err != nil {
-			logger.Fatal(fmt.Errorf("open config err: %+v", err))
-			return
+			log.Fatal(err)
 		}
-		defer f.Close()
-		encoder := json.NewDecoder(f)
-		err = encoder.Decode(config)
+		err = yaml.Unmarshal(data, &config)
 		if err != nil {
-			logger.Warning(fmt.Errorf("decode config err: %v", err))
-			return
+			log.Fatal(err)
 		}
+
 		// 如果环境变量有配置，读取环境变量
+		logLevel := os.Getenv("LOG_LEVEL")
+		if logLevel != "" {
+			config.LogLevel = logLevel
+		}
 		apiKey := os.Getenv("APIKEY")
-		baseURL := os.Getenv("BASE_URL")
-		model := os.Getenv("MODEL")
-		sessionTimeout := os.Getenv("SESSION_TIMEOUT")
-		defaultMode := os.Getenv("DEFAULT_MODE")
-		httpProxy := os.Getenv("HTTP_PROXY")
-		maxRequest := os.Getenv("MAX_REQUEST")
-		port := os.Getenv("PORT")
-		serviceURL := os.Getenv("SERVICE_URL")
 		if apiKey != "" {
 			config.ApiKey = apiKey
 		}
+		baseURL := os.Getenv("BASE_URL")
 		if baseURL != "" {
 			config.BaseURL = baseURL
 		}
+		model := os.Getenv("MODEL")
+		if model != "" {
+			config.Model = model
+		}
+		sessionTimeout := os.Getenv("SESSION_TIMEOUT")
 		if sessionTimeout != "" {
 			duration, err := strconv.ParseInt(sessionTimeout, 10, 64)
 			if err != nil {
@@ -79,34 +109,105 @@ func LoadConfig() *Configuration {
 		} else {
 			config.SessionTimeout = time.Duration(config.SessionTimeout) * time.Second
 		}
+		defaultMode := os.Getenv("DEFAULT_MODE")
 		if defaultMode != "" {
 			config.DefaultMode = defaultMode
 		}
+		httpProxy := os.Getenv("HTTP_PROXY")
 		if httpProxy != "" {
 			config.HttpProxy = httpProxy
 		}
-		if model != "" {
-			config.Model = model
-		}
+		maxRequest := os.Getenv("MAX_REQUEST")
 		if maxRequest != "" {
 			newMR, _ := strconv.Atoi(maxRequest)
 			config.MaxRequest = newMR
 		}
+		port := os.Getenv("PORT")
 		if port != "" {
 			config.Port = port
 		}
+		serviceURL := os.Getenv("SERVICE_URL")
 		if serviceURL != "" {
 			config.ServiceURL = serviceURL
 		}
+		chatType := os.Getenv("CHAT_TYPE")
+		if chatType != "" {
+			config.ChatType = chatType
+		}
+		allowGroups := os.Getenv("ALLOW_GROUPS")
+		if allowGroups != "" {
+			config.AllowGroups = strings.Split(allowGroups, ",")
+		}
+		allowOutgoingGroups := os.Getenv("ALLOW_OUTGOING_GROUPS")
+		if allowOutgoingGroups != "" {
+			config.AllowOutgoingGroups = strings.Split(allowOutgoingGroups, ",")
+		}
+		allowUsers := os.Getenv("ALLOW_USERS")
+		if allowUsers != "" {
+			config.AllowUsers = strings.Split(allowUsers, ",")
+		}
+		denyUsers := os.Getenv("DENY_USERS")
+		if denyUsers != "" {
+			config.DenyUsers = strings.Split(denyUsers, ",")
+		}
+		vipUsers := os.Getenv("VIP_USERS")
+		if vipUsers != "" {
+			config.VipUsers = strings.Split(vipUsers, ",")
+		}
+		adminUsers := os.Getenv("ADMIN_USERS")
+		if adminUsers != "" {
+			config.AdminUsers = strings.Split(adminUsers, ",")
+		}
+		appSecrets := os.Getenv("APP_SECRETS")
+		if appSecrets != "" {
+			config.AppSecrets = strings.Split(appSecrets, ",")
+		}
+		sensitiveWords := os.Getenv("SENSITIVE_WORDS")
+		if sensitiveWords != "" {
+			config.SensitiveWords = strings.Split(sensitiveWords, ",")
+		}
+		help := os.Getenv("HELP")
+		if help != "" {
+			config.Help = help
+		}
+		azureOn := os.Getenv("AZURE_ON")
+		if azureOn != "" {
+			config.AzureOn = azureOn == "true"
+		}
+		azureApiVersion := os.Getenv("AZURE_API_VERSION")
+		if azureApiVersion != "" {
+			config.AzureApiVersion = azureApiVersion
+		}
+		azureResourceName := os.Getenv("AZURE_RESOURCE_NAME")
+		if azureResourceName != "" {
+			config.AzureResourceName = azureResourceName
+		}
+		azureDeploymentName := os.Getenv("AZURE_DEPLOYMENT_NAME")
+		if azureDeploymentName != "" {
+			config.AzureDeploymentName = azureDeploymentName
+		}
+		azureOpenaiToken := os.Getenv("AZURE_OPENAI_TOKEN")
+		if azureOpenaiToken != "" {
+			config.AzureOpenAIToken = azureOpenaiToken
+		}
+
 	})
+
+	// 一些默认值
+	if config.LogLevel == "" {
+		config.LogLevel = "info"
+	}
 	if config.Model == "" {
-		config.DefaultMode = "gpt-3.5-turbo"
+		config.Model = "gpt-3.5-turbo"
 	}
 	if config.DefaultMode == "" {
 		config.DefaultMode = "单聊"
 	}
 	if config.Port == "" {
 		config.Port = "8090"
+	}
+	if config.ChatType == "" {
+		config.ChatType = "0"
 	}
 	if config.ApiKey == "" {
 		logger.Fatal("config err: api key required")
